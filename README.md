@@ -10,8 +10,9 @@ modified; the mod is a Lua script that runs at runtime.
 ## Status
 
 - ✅ Global UI scaling works and is applied live (`UUserInterfaceSettings.ApplicationScale`).
-- ✅ A `UI Scale` row (1.0×–2.0×) is injected into **Settings → Game Settings** using the game's own float-row widget.
+- ✅ A `UI Scale` row (1.0×–2.0×) is injected into **Settings → Game Settings** using the game's own float-row widget, showing the current value.
 - ✅ The chosen value is remembered between sessions.
+- ✅ The row is re-injected if the Settings menu is closed and reopened.
 - ⏳ Gamepad focus/navigation of the injected row is not finished yet; mouse dragging works.
 
 See [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md) for how it

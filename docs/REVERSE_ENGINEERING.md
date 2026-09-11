@@ -126,6 +126,24 @@ exposes a file-driven command channel: write a line to
 `press <button>`, `funcs <s>`, `invoke <class> <func>`, `uiscale_addrow`,
 `uiscale_install`, `uiscale_set <n>`, `sdk`, `uht`, `objdump`.
 
+## Crash hazards (important)
+
+Do **not** do any of the following from Lua — each was observed to crash the
+game with `EXCEPTION_ACCESS_VIOLATION` (C0000005) when the Settings menu
+opened or rebuilt:
+
+- Iterating the panel's widget children (`OptionsBox:GetChildrenCount/GetChildAt`)
+  and reading `Text_OptionName` / calling `GetText()` on them.
+- Adding the injected row to the game's `OptionWidgetArray` / `OptionList`
+  (the game dereferences those assuming its own managed widgets).
+- Calling the panel's `RefreshSettings` / `ActiveInit` after modifying
+  `CategoryValueArray`.
+
+Safe operations used by the mod: `WidgetBlueprintLibrary::Create` for the row,
+setting the row's own properties/children, `OptionsBox:AddChild`, and
+`OptionsBox:ScrollWidgetIntoView`. Detection of "is the row present" is done
+only with `IsValid(row)` on our own widget reference.
+
 ## Known limitations / next work
 
 - The injected row is added at the end of the scroll box and is not yet part

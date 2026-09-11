@@ -278,6 +278,7 @@ local function firstLiveObject(substr, requiredClassPath)
                 if isClass then ok = false end
             end
             if ok and className(obj) == "Package" then ok = false end
+            if ok and className(obj) == "Function" then ok = false end
             if ok and isValid(required) then
                 local isReq = false
                 pcall(function() isReq = obj:IsA(required) end)
@@ -318,6 +319,12 @@ local function getPropPath(classSubstr, path)
         log(string.format("  %s -> %s%s", part, tostring(cur),
             len and (" (len " .. len .. ")") or ""))
     end
+    -- If the path resolved to an object, show its properties too.
+    local isObj = false
+    pcall(function() isObj = (cur.GetFullName ~= nil) end)
+    if isObj then
+        dumpObjectProperties(cur)
+    end
 end
 
 local UI_SCALE_NAME = "UI Scale"
@@ -334,8 +341,18 @@ local function makeText(s)
     return s
 end
 
+local function textToString(t)
+    local lib = StaticFindObject("/Script/Engine.Default__KismetTextLibrary")
+    if isValid(lib) and t ~= nil then
+        local ok, s = pcall(function() return lib:Conv_TextToString(t) end)
+        if ok then return s end
+    end
+    return nil
+end
+
 --- Add a "UI Scale" float row to the game's own Game Settings panel by
---- extending its CategoryValueArray and rebuilding the list.
+--- extending its CategoryValueArray and rebuilding the list. EXPERIMENTAL:
+--- calling the panel's ActiveInit/RefreshSettings has crashed the game before.
 local function installOption()
     local panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")
     if not panel then
@@ -377,12 +394,11 @@ local function injectRowInto(panel)
         log("addrow: panel not valid")
         return
     end
-    -- Avoid injecting twice into the same live panel. UObject identity is not
-    -- comparable with ==, so compare fully-qualified names instead.
-    local existing = _G.LibrarianUIScale_row
-    local injectedPanel = _G.LibrarianUIScale_panel
-    if isValid(existing) and isValid(injectedPanel)
-        and fullName(injectedPanel) == fullName(panel) then
+    -- Re-inject whenever our row is gone (the game rebuilds the panel when
+    -- Settings is closed and reopened, destroying the row). We only ever touch
+    -- our own objects here: iterating the game's widgets from Lua has been
+    -- observed to crash the game (C0000005 / EXCEPTION_ACCESS_VIOLATION).
+    if isValid(_G.LibrarianUIScale_row) then
         return
     end
     local lib = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
@@ -433,6 +449,19 @@ local function injectRowInto(panel)
             row.Slider_Value:SetStepSize(UI_SCALE_STEP)
             row.Slider_Value:SetValue(currentScale)
         end)
+        local mn, mx, val = "?", "?", "?"
+        pcall(function() mn = tostring(row.Slider_Value:GetMinValue()) end)
+        pcall(function() mx = tostring(row.Slider_Value:GetMaxValue()) end)
+        pcall(function() val = tostring(row.Slider_Value:GetValue()) end)
+        log(string.format("addrow: slider min=%s max=%s value=%s", mn, mx, val))
+    end
+    -- Show the current multiplier in the row's editable value field, if any.
+    if isValid(row.EditableText_Value) then
+        pcall(function() row.EditableText_Value:SetText(makeText(string.format("%.1f", currentScale))) end)
+    end
+    if isValid(row.ProgressBar_Value) then
+        local pct = (currentScale - UI_SCALE_MIN) / (UI_SCALE_MAX - UI_SCALE_MIN)
+        pcall(function() row.ProgressBar_Value:SetPercent(pct) end)
     end
 
     local box = nil
@@ -441,8 +470,19 @@ local function injectRowInto(panel)
         log("addrow: OptionsBox not found")
         return
     end
+    -- AddChild is the proven-safe path; InsertChildAt and touching the game's
+    -- OptionWidgetArray were both observed to crash the game.
     local oka, erra = pcall(function() box:AddChild(row) end)
     log("addrow: AddChild ok=" .. tostring(oka) .. " err=" .. tostring(erra))
+    -- Try to bring it into view without reordering the list.
+    pcall(function() box:ScrollWidgetIntoView(row, false, 0) end)
+
+    -- NOTE: do NOT add this row to the panel's OptionWidgetArray / OptionList.
+    -- The game iterates those and assumes its own managed widgets; a foreign
+    -- entry makes it dereference invalid data and crash (observed: C0000005).
+    -- Visibility is handled by placing the row at the top of the scroll box and
+    -- by tools to scroll it into view instead.
+
     _G.LibrarianUIScale_row = row
     _G.LibrarianUIScale_panel = panel
 end
@@ -473,6 +513,24 @@ local function setSlider(value)
     local sliderVal = "?"
     pcall(function() sliderVal = tostring(row.Slider_Value:GetValue()) end)
     log(string.format("uiscale_set %.2f ok=%s err=%s sliderVal=%s", value, tostring(ok), tostring(err), sliderVal))
+end
+
+--- Scroll the injected row into view and make the scroll bar visible.
+local function scrollToRow()
+    local row = _G.LibrarianUIScale_row
+    local panel = _G.LibrarianUIScale_panel
+    if not isValid(row) or not isValid(panel) then
+        log("scrollto: no injected row/panel")
+        return
+    end
+    local box = nil
+    pcall(function() box = panel.OptionsBox end)
+    if not isValid(box) then
+        log("scrollto: no OptionsBox")
+        return
+    end
+    local ok, err = pcall(function() box:ScrollWidgetIntoView(row, false, 0) end)
+    log("scrollto ok=" .. tostring(ok) .. " err=" .. tostring(err))
 end
 
 --- Probe the settings data model: enumerate categories and option rows.
@@ -588,9 +646,9 @@ local function probeFunctions(substr)
 end
 
 --- Call a UFunction by name on the first live object whose class matches.
-local function invokeFunction(classSubstr, funcName)
+local function invokeFunction(classSubstr, funcName, arg1, arg2)
     if not classSubstr or not funcName then
-        log("invoke: need <classSubstr> <funcName>")
+        log("invoke: need <classSubstr> <funcName> [arg1] [arg2]")
         return
     end
     local needle = classSubstr:lower()
@@ -616,7 +674,10 @@ local function invokeFunction(classSubstr, funcName)
         pcall(function() fn = target[funcName] end)
         if fn then
             log("invoke: " .. funcName .. " on " .. fullName(target))
-            local ok, err = pcall(function() return target[funcName](target) end)
+            local args = { target }
+            if arg1 ~= nil and arg1 ~= "" then args[#args + 1] = tonumber(arg1) or arg1 end
+            if arg2 ~= nil and arg2 ~= "" then args[#args + 1] = tonumber(arg2) or arg2 end
+            local ok, err = pcall(function() return target[funcName](table.unpack(args)) end)
             log("invoke result ok=" .. tostring(ok) .. " err=" .. tostring(err))
             if ok then return end
         end
@@ -772,12 +833,14 @@ local function runCommand(line)
         addRow()
     elseif c == "uiscale_set" then
         setSlider(parts[2])
+    elseif c == "uiscale_scrollto" then
+        scrollToRow()
     elseif c == "press" then
         pressButton(parts[2])
     elseif c == "funcs" then
         probeFunctions(parts[2])
     elseif c == "invoke" then
-        invokeFunction(parts[2], parts[3])
+        invokeFunction(parts[2], parts[3], parts[4], parts[5])
     elseif c == "sdk" then
         local ok, err = pcall(function() GenerateSDK() end)
         log("GenerateSDK ok=" .. tostring(ok) .. " err=" .. tostring(err))
@@ -924,15 +987,10 @@ end)
 -- Inject the UI Scale row as soon as the Game Settings panel exists, and again
 -- if the panel is rebuilt (closing and reopening Settings).
 LoopAsync(1000, function()
+    if isValid(_G.LibrarianUIScale_row) then return false end
     local panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")
     if isValid(panel) then
-        local existing = _G.LibrarianUIScale_row
-        local injectedPanel = _G.LibrarianUIScale_panel
-        local alreadyInjected = isValid(existing) and isValid(injectedPanel)
-            and fullName(injectedPanel) == fullName(panel)
-        if not alreadyInjected then
-            injectRowInto(panel)
-        end
+        injectRowInto(panel)
     end
     return false
 end)
