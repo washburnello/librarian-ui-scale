@@ -141,8 +141,17 @@ opened or rebuilt:
 
 Safe operations used by the mod: `WidgetBlueprintLibrary::Create` for the row,
 setting the row's own properties/children, `OptionsBox:AddChild`, and
-`OptionsBox:ScrollWidgetIntoView`. Detection of "is the row present" is done
-only with `IsValid(row)` on our own widget reference.
+`OptionsBox:ScrollWidgetIntoView`.
+
+Two more runtime quirks discovered while fixing the reopen bug:
+
+- `UUserWidget:IsInViewport()` returns **false** for the Settings panel even
+  when it is open. Use `IsVisible()` instead (correctly false/true on
+  close/open).
+- When the menu is cancelled and reopened, the panel object is **reused** and
+  our row object survives but becomes **orphaned** (`row:GetParent()` returns
+  none) while `IsValid(row)` stays true. Re-injection is therefore gated on
+  `row:GetParent()` matching the panel's `OptionsBox`, not on `IsValid` alone.
 
 ## Known limitations / next work
 

@@ -515,6 +515,24 @@ local function setSlider(value)
     log(string.format("uiscale_set %.2f ok=%s err=%s sliderVal=%s", value, tostring(ok), tostring(err), sliderVal))
 end
 
+--- Report injection/visibility state (diagnostics).
+local function uiscaleStatus()
+    local panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")
+    local row = _G.LibrarianUIScale_row
+    local pvis, pname, rvis, rparent = "?", "none", "?", "none"
+    if isValid(panel) then
+        pname = fullName(panel)
+        pcall(function() pvis = tostring(panel:IsVisible()) end)
+    end
+    if isValid(row) then
+        pcall(function() rvis = tostring(row:IsVisible()) end)
+        pcall(function() local p = row:GetParent(); if isValid(p) then rparent = fullName(p) end end)
+    end
+    log("status: panelValid=" .. tostring(isValid(panel)) .. " panelVisible=" .. pvis)
+    log("  panelName=" .. pname)
+    log("  rowValid=" .. tostring(isValid(row)) .. " rowVisible=" .. rvis .. " rowParent=" .. rparent)
+end
+
 --- Scroll the injected row into view and make the scroll bar visible.
 local function scrollToRow()
     local row = _G.LibrarianUIScale_row
@@ -835,6 +853,8 @@ local function runCommand(line)
         setSlider(parts[2])
     elseif c == "uiscale_scrollto" then
         scrollToRow()
+    elseif c == "uiscale_status" then
+        uiscaleStatus()
     elseif c == "press" then
         pressButton(parts[2])
     elseif c == "funcs" then
@@ -986,10 +1006,27 @@ end)
 
 -- Inject the UI Scale row as soon as the Game Settings panel exists, and again
 -- if the panel is rebuilt (closing and reopening Settings).
-LoopAsync(1000, function()
-    if isValid(_G.LibrarianUIScale_row) then return false end
+--- Is our row currently attached to this panel's scroll box? After the menu is
+--- cancelled and reopened the row survives as an object but is orphaned
+--- (GetParent() returns none), so IsValid alone is not enough.
+local function rowAttachedTo(panel)
+    local row = _G.LibrarianUIScale_row
+    if not isValid(row) then return false end
+    local parent, box = nil, nil
+    pcall(function() parent = row:GetParent() end)
+    pcall(function() box = panel.OptionsBox end)
+    if not isValid(parent) or not isValid(box) then return false end
+    return fullName(parent) == fullName(box)
+end
+
+LoopAsync(700, function()
     local panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")
-    if isValid(panel) then
+    if not isValid(panel) then return false end
+    local visible = false
+    pcall(function() visible = panel:IsVisible() end)
+    if not visible then return false end
+    if not rowAttachedTo(panel) then
+        _G.LibrarianUIScale_row = nil
         injectRowInto(panel)
     end
     return false
