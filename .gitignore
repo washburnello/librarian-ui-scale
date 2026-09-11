@@ -1,0 +1,10 @@
+# Bundled UE4SS runtime (fetched by tools/fetch-ue4ss.sh, attached to releases)
+/ue4ss/
+
+# Build output
+/dist/
+
+# Logs / local junk
+*.log
+*.tmp
+.DS_Store
