@@ -147,10 +147,55 @@ local function dumpUISettings()
     end
 end
 
+local UI_SCALE_NAME = "UI Scale"
+
+-- Discrete scales offered by the arrows: 0.25x .. 3.00x in 0.25 steps.
+local UI_SCALE_VALUES = {}
+do
+    local v = 0.25
+    while v <= 3.0001 do
+        UI_SCALE_VALUES[#UI_SCALE_VALUES + 1] = math.floor(v * 100 + 0.5) / 100
+        v = v + 0.25
+    end
+end
+
+local function scaleLabel(v)
+    return string.format("%.2fx", v)
+end
+
+local function nearestScaleIndex(v)
+    local best, bi = math.huge, 1
+    for i, s in ipairs(UI_SCALE_VALUES) do
+        local d = math.abs(s - v)
+        if d < best then
+            best, bi = d, i
+        end
+    end
+    return bi
+end
+
+local function makeText(s)
+    local lib = StaticFindObject("/Script/Engine.Default__KismetTextLibrary")
+    if isValid(lib) then
+        local ok, t = pcall(function() return lib:Conv_StringToText(s) end)
+        if ok and t ~= nil then return t end
+    end
+    return s
+end
+
+local function textToString(t)
+    local lib = StaticFindObject("/Script/Engine.Default__KismetTextLibrary")
+    if isValid(lib) and t ~= nil then
+        local ok, s = pcall(function() return lib:Conv_TextToString(t) end)
+        if ok then return s end
+    end
+    return nil
+end
+
 local function clamp(v)
     v = tonumber(v) or 1.0
-    if v < (config.min or 1.0) then v = config.min or 1.0 end
-    if v > (config.max or 2.5) then v = config.max or 2.5 end
+    if v < (config.min or 0.25) then v = config.min or 0.25 end
+    if v > (config.max or 3.0) then v = config.max or 3.0 end
     return v
 end
 
@@ -170,11 +215,15 @@ local function applyScale(v, persist, inline)
         log(string.format("applyScale -> %.2f (read back %s)", v, tostring(readScale())))
     end
     if inline then set() else onGameThread(set) end
-    -- Keep the injected slider in sync when the scale changes from elsewhere.
+    -- Keep the injected row in sync when the scale changes from elsewhere
+    -- (hotkeys / config), and refresh the on-screen indicator.
     local row = _G.LibrarianUIScale_row
     if isValid(row) then
-        pcall(function() row.Slider_Value:SetValue(v) end)
-        pcall(function() row.Option.OptionValue.FloatValue = v end)
+        pcall(function() row.Option.OptionValue.IntValue = nearestScaleIndex(v) - 1 end)
+        pcall(function() row.Option.OptionValue.TextValue = makeText(scaleLabel(v)) end)
+        pcall(function()
+            row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(v)))
+        end)
     end
     if persist ~= false then persistScale(v) end
 end
@@ -327,115 +376,49 @@ local function getPropPath(classSubstr, path)
     end
 end
 
-local UI_SCALE_NAME = "UI Scale"
-local UI_SCALE_MIN = 1.0
-local UI_SCALE_MAX = 2.0
-local UI_SCALE_STEP = 0.1
-
-local function makeText(s)
-    local lib = StaticFindObject("/Script/Engine.Default__KismetTextLibrary")
-    if isValid(lib) then
-        local ok, t = pcall(function() return lib:Conv_StringToText(s) end)
-        if ok and t ~= nil then return t end
-    end
-    return s
-end
-
-local function textToString(t)
-    local lib = StaticFindObject("/Script/Engine.Default__KismetTextLibrary")
-    if isValid(lib) and t ~= nil then
-        local ok, s = pcall(function() return lib:Conv_TextToString(t) end)
-        if ok then return s end
-    end
-    return nil
-end
-
---- Add a "UI Scale" float row to the game's own Game Settings panel by
---- extending its CategoryValueArray and rebuilding the list. EXPERIMENTAL:
---- calling the panel's ActiveInit/RefreshSettings has crashed the game before.
-local function installOption()
-    local panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")
-    if not panel then
-        log("install: Game Settings panel not live (open Settings first)")
-        return
-    end
-    local opts = panel.CategoryValueArray[1].OptionValueArray
-    local n = nil
-    pcall(function() n = #opts end)
-    if not n or n < 1 then
-        log("install: could not read Game Settings option array")
-        return
-    end
-
-    -- Reuse the last float option (Field Of View) as a structural template.
-    table.insert(opts, opts[n])
-    local revised = opts[#opts]
-    pcall(function() revised.Name = makeText(UI_SCALE_NAME) end)
-    pcall(function() revised.ValueMinMax.X = UI_SCALE_MIN end)
-    pcall(function() revised.ValueMinMax.Y = UI_SCALE_MAX end)
-    pcall(function() revised.DefaultFltValue = currentScale end)
-    pcall(function() revised.OffsetValue = UI_SCALE_STEP end)
-    pcall(function() revised.OptionValue.FloatValue = currentScale end)
-    pcall(function() revised.CanDirectEdit = false end)
-    local okAssign, errAssign = pcall(function() opts[#opts] = revised end)
-    log("install: assign back ok=" .. tostring(okAssign) .. " err=" .. tostring(errAssign))
-
-    local ok, err = pcall(function() panel:RefreshSettings() end)
-    log("install: RefreshSettings ok=" .. tostring(ok) .. " err=" .. tostring(err))
-    -- The actual row construction lives in the panel's Blueprint ActiveInit event.
-    local okA, errA = pcall(function() panel:ActiveInit() end)
-    log("install: ActiveInit ok=" .. tostring(okA) .. " err=" .. tostring(errA))
-end
-
---- Create and configure a fresh UI Scale row (does NOT attach it).
+--- Create and configure a fresh UI Scale row (does NOT attach it). Uses the
+--- game's enum row so the value is chosen with left/right arrow buttons.
 local function createScaleRow(panel)
     local lib = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
     if not isValid(lib) then
         log("addrow: UWidgetBlueprintLibrary not found")
         return nil
     end
-    local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Float.OptionUMG_Float_C")
+    local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Enum.OptionUMG_Enum_C")
     local pc = FindFirstOf("PlayerController")
     local row = nil
     local ok, err = pcall(function() row = lib:Create(panel, rowClass, pc) end)
     log("addrow: create ok=" .. tostring(ok) .. " err=" .. tostring(err))
     if not isValid(row) then return nil end
+    log("addrow: step0 created")
 
     pcall(function() row.ParentWidget = panel end)
+    log("addrow: step1 parent")
+
+    local idx = nearestScaleIndex(currentScale)
     local option = nil
     pcall(function() option = row.Option end)
     pcall(function()
         option.Name = makeText(UI_SCALE_NAME)
-        option.ValueMinMax.X = UI_SCALE_MIN
-        option.ValueMinMax.Y = UI_SCALE_MAX
-        option.DefaultFltValue = currentScale
-        option.OptionValue.FloatValue = currentScale
+        option.DefaultIntValue = idx - 1
+        option.OptionValue.IntValue = idx - 1
+        option.OptionValue.OptionNum = #UI_SCALE_VALUES
+        option.OptionValue.TextValue = makeText(scaleLabel(currentScale))
+        option.CanDirectEdit = false
         row.Option = option
     end)
-    pcall(function() row:CreateContentBP(row.Option) end)
+    log("addrow: step2 option")
+
+    local iv = "?"
+    pcall(function() iv = tostring(row.Option.OptionValue.IntValue) end)
+    log("addrow: step3 intValue=" .. iv)
 
     if isValid(row.Text_OptionName) then
-        pcall(function() row.Text_OptionName:SetText(makeText(UI_SCALE_NAME)) end)
-    end
-    if isValid(row.Text_OptionValue) then
-        pcall(function() row.Text_OptionValue:SetText(makeText(string.format("%.1fx", currentScale))) end)
-    end
-    if isValid(row.Slider_Value) then
         pcall(function()
-            row.Slider_Value:SetMinValue(UI_SCALE_MIN)
-            row.Slider_Value:SetMaxValue(UI_SCALE_MAX)
-            row.Slider_Value:SetStepSize(UI_SCALE_STEP)
-            row.Slider_Value:SetValue(currentScale)
+            row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(currentScale)))
         end)
     end
-
-    if isValid(row.EditableText_Value) then
-        pcall(function() row.EditableText_Value:SetText(makeText(string.format("%.1f", currentScale))) end)
-    end
-    if isValid(row.ProgressBar_Value) then
-        local pct = (currentScale - UI_SCALE_MIN) / (UI_SCALE_MAX - UI_SCALE_MIN)
-        pcall(function() row.ProgressBar_Value:SetPercent(pct) end)
-    end
+    log("addrow: step4 name")
     return row
 end
 
@@ -498,9 +481,8 @@ local function addRow()
     attachRow(firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget"))
 end
 
---- Drive the injected row's slider programmatically (simulates the player
---- dragging it) so the whole change path can be tested without input.
-local function setSlider(value)
+--- Set the injected row's selected scale (simulates the arrow buttons).
+local function setScale(value)
     value = tonumber(value)
     if not value then
         log("uiscale_set: need a number")
@@ -508,18 +490,17 @@ local function setSlider(value)
     end
     local row = _G.LibrarianUIScale_row
     if not isValid(row) then
-        row = firstLiveObject(UI_SCALE_NAME, "/Script/Librarian.OptionWidgetBase_Float")
+        row = firstLiveObject(UI_SCALE_NAME, "/Script/Librarian.OptionWidgetBase_Enum")
     end
     if not isValid(row) then
-        log("uiscale_set: UI Scale row not found (run uiscale_addrow with Settings open)")
+        log("uiscale_set: UI Scale row not found")
         return
     end
-    -- Moving the slider is what a real drag does; the poll applies the change.
-    local ok, err = pcall(function() row.Slider_Value:SetValue(value) end)
-    pcall(function() row.Option.OptionValue.FloatValue = value end)
-    local sliderVal = "?"
-    pcall(function() sliderVal = tostring(row.Slider_Value:GetValue()) end)
-    log(string.format("uiscale_set %.2f ok=%s err=%s sliderVal=%s", value, tostring(ok), tostring(err), sliderVal))
+    local idx = nearestScaleIndex(value)
+    pcall(function() row.Option.OptionValue.IntValue = idx - 1 end)
+    local iv = "?"
+    pcall(function() iv = tostring(row.Option.OptionValue.IntValue) end)
+    log(string.format("uiscale_set %.2f -> idx=%d intValue=%s", value, idx, iv))
 end
 
 --- Report injection/visibility state (diagnostics).
@@ -915,12 +896,10 @@ local function runCommand(line)
         getPropPath(parts[2], parts[3])
     elseif c == "settingdata" then
         probeSettingData(parts[2])
-    elseif c == "uiscale_install" then
-        installOption()
     elseif c == "uiscale_addrow" then
         addRow()
     elseif c == "uiscale_set" then
-        setSlider(parts[2])
+        setScale(parts[2])
     elseif c == "uiscale_scrollto" then
         scrollToRow()
     elseif c == "uiscale_status" then
@@ -1157,15 +1136,16 @@ LoopAsync(150, function()
     return false
 end)
 
--- Apply changes the player makes by dragging the injected UI Scale slider.
+-- Apply changes the player makes with the row's arrow buttons (which update
+-- the enum index), and keep the on-screen indicator in sync.
 LoopAsync(200, function()
     local row = _G.LibrarianUIScale_row
-    if isValid(row) and isValid(row.Slider_Value) then
-        local v = nil
-        pcall(function() v = row.Slider_Value:GetValue() end)
-        if v and math.abs(v - currentScale) > 0.001 then
-            applyScale(v, true, false)
-            pcall(function() row.Option.OptionValue.FloatValue = v end)
+    if isValid(row) then
+        local iv = nil
+        pcall(function() iv = tonumber(row.Option.OptionValue.IntValue) end)
+        local scale = iv and UI_SCALE_VALUES[iv + 1]
+        if scale and math.abs(scale - currentScale) > 0.001 then
+            applyScale(scale, true, false)
         end
     end
     return false

@@ -89,23 +89,27 @@ the option's display name.
 
 ### Injection method used by this mod
 
-1. Create a new row from the game's own float-row widget class:
+1. Create a new row from the game's arrow-button row class
+   (`OptionUMG_Enum`), which renders `< value >` and has next/previous buttons:
 
    ```lua
    local lib = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
-   local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Float.OptionUMG_Float_C")
+   local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Enum.OptionUMG_Enum_C")
    local row = lib:Create(panel, rowClass, FindFirstOf("PlayerController"))
    ```
 
-2. Configure it (`row.Option.Name = "UI Scale"`, `ValueMinMax` = 1.0..2.0,
-   `row.ParentWidget = panel`), then set the child widgets directly:
-   `row.Text_OptionName:SetText(...)`, `row.Slider_Value:SetMinValue/
-   SetMaxValue/SetStepSize/SetValue`.
+2. Configure `row.Option`: `Name`, `OptionValue.IntValue` (0-based index),
+   `OptionValue.OptionNum` (count), and `TextValue`. Set the label to include
+   the current scale (`row.Text_OptionName:SetText("UI Scale: 1.50x")`).
 3. Add it: `panel.OptionsBox:AddChild(row)`.
 4. The game's own change path does not know a "UI Scale" setting, so a short
-   poll watches `row.Slider_Value:GetValue()` and calls `applyScale` when it
-   changes. This avoids relying on UMG delegate binding from Lua.
+   poll watches `row.Option.OptionValue.IntValue` and maps it to the scale
+   table, calling `applyScale`. This avoids relying on UMG delegate binding.
 5. Persist the value in `Scripts/scale.txt`; re-apply on startup.
+
+**Do not** populate `Option.ExtraTextArray` (the enum value labels) from Lua.
+`table.insert`/assignment on that nested `TArray<FText>` corrupts memory and
+freezes the game; the scale indicator is carried by the row label instead.
 
 **Controller focus:** the game drives controller navigation over its own
 `UBasicWidget` lists (`OptionWidgetArray`, `OptionList`) and BP events
