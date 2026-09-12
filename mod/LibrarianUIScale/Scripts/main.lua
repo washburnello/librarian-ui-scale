@@ -1019,9 +1019,59 @@ local function rowAttachedTo(panel)
     return fullName(parent) == fullName(box)
 end
 
-LoopAsync(700, function()
-    local panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")
+-- Inject almost immediately after the player opens Settings (title or pause
+-- menu), so the row does not visibly pop in. The fast poll below is the
+-- fallback for any other way the menu can be opened.
+local function scheduleInject(delayMs)
+    LoopAsync(delayMs or 50, function()
+        local panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")
+        if isValid(panel) and not rowAttachedTo(panel) then
+            _G.LibrarianUIScale_row = nil
+            injectRowInto(panel)
+        end
+        return true
+    end)
+end
+
+-- Blueprint functions are not loaded when the mod starts, so register these
+-- lazily (once the game classes exist) and isolate each one.
+local hookedPaths = {}
+local function registerOpenHooks()
+    local handlers = {
+        "/Game/Librarian/UI/Title/WBP_Title.WBP_Title_C:BndEvt__WBP_Title_Button_Options_K2Node_ComponentBoundEvent_1_OnButtonPressedEvent__DelegateSignature",
+        "/Game/Librarian/UI/Title/WBP_PauseMenu.WBP_PauseMenu_C:BndEvt__WBP_PauseMenu_Button_Option_K2Node_ComponentBoundEvent_1_OnButtonClickedEvent__DelegateSignature",
+    }
+    for _, path in ipairs(handlers) do
+        if not hookedPaths[path] then
+            local ok, err = pcall(function()
+                RegisterHook(path, function(self) end, function(self) scheduleInject(50) end)
+            end)
+            if ok then
+                hookedPaths[path] = true
+                log("hooked open handler: " .. path)
+            else
+                log("could not hook " .. path .. ": " .. tostring(err))
+            end
+        end
+    end
+end
+
+-- Fast poll. The Settings panel is cached so this only costs a couple of cheap
+-- method calls per tick; a full object scan happens only if the cached panel
+-- goes away (e.g. a new game session).
+local cachedPanel = nil
+local openHooksTried = false
+LoopAsync(150, function()
+    local panel = cachedPanel
+    if not isValid(panel) then
+        panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")
+        cachedPanel = panel
+    end
     if not isValid(panel) then return false end
+    if not openHooksTried then
+        openHooksTried = true
+        registerOpenHooks()
+    end
     local visible = false
     pcall(function() visible = panel:IsVisible() end)
     if not visible then return false end

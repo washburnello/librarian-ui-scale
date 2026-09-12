@@ -107,6 +107,11 @@ the option's display name.
    changes. This avoids relying on UMG delegate binding from Lua.
 5. Persist the value in `Scripts/scale.txt`; re-apply on startup.
 
+**Timing:** opening the menu is detected by post-hooks on the title and pause
+"Options" button handlers (registered lazily, because Blueprint UFunctions are
+not loaded at mod start). A 150 ms poll is the fallback. An earlier 700 ms poll
+was visible as the row "popping in" a moment after the menu opened.
+
 ### Useful game symbols
 
 - Options button handler:
