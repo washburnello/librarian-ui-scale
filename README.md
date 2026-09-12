@@ -11,7 +11,7 @@ modified; the mod is a Lua script that runs at runtime.
 
 - ✅ Global UI scaling works and is applied live (`UUserInterfaceSettings.ApplicationScale`).
 - ✅ A `UI Scale` row is injected into **Settings → Game Settings** using the
-  game's own arrow-button (enum) row. It steps **0.25×–3.00× in 0.25 steps**, and
+  game's own arrow-button (text) row. It steps **0.25×–3.00× in 0.25 steps**, and
   the row label shows the current value (e.g. `UI Scale: 1.50x`).
 - ✅ The chosen value is remembered between sessions.
 - ✅ The row is re-injected if the Settings menu is closed and reopened.

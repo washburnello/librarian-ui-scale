@@ -90,21 +90,26 @@ the option's display name.
 ### Injection method used by this mod
 
 1. Create a new row from the game's arrow-button row class
-   (`OptionUMG_Enum`), which renders `< value >` and has next/previous buttons:
+   (`OptionUMG_Text`), which renders next/previous buttons:
 
    ```lua
    local lib = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
-   local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Enum.OptionUMG_Enum_C")
+   local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Text.OptionUMG_Text_C")
    local row = lib:Create(panel, rowClass, FindFirstOf("PlayerController"))
    ```
 
 2. Configure `row.Option`: `Name`, `OptionValue.IntValue` (0-based index),
    `OptionValue.OptionNum` (count), and `TextValue`. Set the label to include
-   the current scale (`row.Text_OptionName:SetText("UI Scale: 1.50x")`).
+   the current scale (`row.Text_OptionName:SetText("UI Scale: 1.50x")`). Unlike
+   the enum row, the text row's value cell reads `OptionValue.TextValue` rather
+   than an `ExtraTextArray` label, so it does not show "Invalid" and its
+   `Text_OptionValue` is a valid text block.
 3. Add it: `panel.OptionsBox:AddChild(row)`.
-4. The game's own change path does not know a "UI Scale" setting, so a short
-   poll watches `row.Option.OptionValue.IntValue` and maps it to the scale
-   table, calling `applyScale`. This avoids relying on UMG delegate binding.
+4. The game's own change path does not know a "UI Scale" setting. Both paths are
+   intercepted: `USettingWidget:ChangeOptionFlt` (float rows) and
+   `USettingWidget:ChangeOption` (arrow rows, called with a `±1` delta). A short
+   poll also watches `row.Option.OptionValue.IntValue` as a fallback. This
+   avoids relying on UMG delegate binding from Lua.
 5. Persist the value in `Scripts/scale.txt`; re-apply on startup.
 
 **Do not** populate `Option.ExtraTextArray` (the enum value labels) from Lua.

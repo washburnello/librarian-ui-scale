@@ -224,6 +224,11 @@ local function applyScale(v, persist, inline)
         pcall(function()
             row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(v)))
         end)
+        pcall(function()
+            if isValid(row.Text_OptionValue) then
+                row.Text_OptionValue:SetText(makeText(scaleLabel(v)))
+            end
+        end)
     end
     if persist ~= false then persistScale(v) end
 end
@@ -384,7 +389,7 @@ local function createScaleRow(panel)
         log("addrow: UWidgetBlueprintLibrary not found")
         return nil
     end
-    local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Enum.OptionUMG_Enum_C")
+    local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Text.OptionUMG_Text_C")
     local pc = FindFirstOf("PlayerController")
     local row = nil
     local ok, err = pcall(function() row = lib:Create(panel, rowClass, pc) end)
@@ -418,7 +423,12 @@ local function createScaleRow(panel)
             row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(currentScale)))
         end)
     end
-    log("addrow: step4 name")
+    local hasValueText = false
+    pcall(function() hasValueText = isValid(row.Text_OptionValue) end)
+    if hasValueText then
+        pcall(function() row.Text_OptionValue:SetText(makeText(scaleLabel(currentScale))) end)
+    end
+    log("addrow: step4 name, valueText=" .. tostring(hasValueText))
     return row
 end
 
@@ -999,6 +1009,32 @@ safe("hook SettingWidget:ChangeOptionFlt", function()
             end
         end)
     log("hook ChangeOptionFlt registered")
+end)
+
+-- Same interception for the integer path used by arrow (enum/text) rows.
+safe("hook SettingWidget:ChangeOption", function()
+    RegisterHook("/Script/Librarian.SettingWidget:ChangeOption",
+        function(self, optionName, delta, returnValue)
+            local name = optionName
+            if type(name) ~= "string" then
+                local ok, s = pcall(function() return name:ToString() end)
+                if ok then name = s end
+            end
+            if tostring(name) == UI_SCALE_NAME then
+                local d = tonumber(delta) or 0
+                local idx = nearestScaleIndex(currentScale) - 1 + d
+                if idx < 0 then idx = 0 end
+                if idx > #UI_SCALE_VALUES - 1 then idx = #UI_SCALE_VALUES - 1 end
+                local newScale = UI_SCALE_VALUES[idx + 1]
+                log(string.format("hook ChangeOption '%s' delta=%s -> %.2f",
+                    tostring(name), tostring(delta), newScale))
+                applyScale(newScale, true, true)
+                pcall(function() returnValue.IntValue = idx end)
+                pcall(function() returnValue.FloatValue = newScale end)
+                pcall(function() returnValue.TextValue = makeText(scaleLabel(newScale)) end)
+            end
+        end)
+    log("hook ChangeOption registered")
 end)
 
 -- Inject the UI Scale row whenever the Game Settings panel initialises.
