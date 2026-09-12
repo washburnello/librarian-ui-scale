@@ -507,6 +507,12 @@ local function registerFocus(panel, row)
         tostring(okW), tostring(addedW), tostring(okL), tostring(addedL)))
 end
 
+-- NOTE: extending the controller-navigation count by appending to the panel's
+-- CategoryValueArray is NOT safe: mutating that nested TArray<FOptionData> from
+-- Lua hangs the game (same class of bug as the other nested-array edits). The
+-- game's navigation limit comes from that data, which is why the cursor stops
+-- one short of our row.
+
 --- Ensure our row exists and is attached to the panel. Reuses the existing row
 --- object when possible so focus-list membership stays valid across a
 --- close/reopen (the row survives but is orphaned).
@@ -631,6 +637,53 @@ local function enableRow()
     if n then pcall(function() row.Button_NextOption:SetIsEnabled(true) end) end
     if p then pcall(function() row.Button_PreOption:SetIsEnabled(true) end) end
     log("enablerow: setEnabled, buttons next=" .. tostring(n) .. " pre=" .. tostring(p))
+end
+
+--- Diagnostics: watch the panel's controller-focus indices while the player
+--- navigates with a gamepad. Logs only when something changes.
+local function watchNav(seconds)
+    seconds = tonumber(seconds) or 90
+    local deadline = os.clock() + seconds
+    local last = nil
+    LoopAsync(250, function()
+        if os.clock() > deadline then
+            log("navwatch: stopped")
+            return true
+        end
+        local panel = _G.LibrarianUIScale_panel
+        if isValid(panel) then
+            local si, lr, ol, wa, sel = "?", "?", "?", "?", "?"
+            pcall(function() si = tostring(panel.SelectOptionIdx) end)
+            pcall(function() lr = tostring(panel.SelectOptionLRIdx) end)
+            pcall(function() ol = tostring(#panel.OptionList) end)
+            pcall(function() wa = tostring(#panel.OptionWidgetArray) end)
+            pcall(function() sel = tostring(panel.SelectedIdx) end)
+            local line = "navwatch SelectOptionIdx=" .. si .. " LRIdx=" .. lr
+                .. " SelectedIdx=" .. sel .. " OptionList=" .. ol
+                .. " OptionWidgetArray=" .. wa
+            if line ~= last then
+                last = line
+                log(line)
+            end
+        end
+        return false
+    end)
+end
+
+--- Diagnostics: give our row Slate keyboard focus and see if the game's
+--- selection follows (tells us whether controller nav is Slate-focus based).
+local function focusRow()
+    local row = _G.LibrarianUIScale_row
+    if not isValid(row) then
+        log("focusrow: no row")
+        return
+    end
+    local ok, err = pcall(function() row:SetKeyboardFocus() end)
+    local panel = _G.LibrarianUIScale_panel
+    local sel = "?"
+    pcall(function() sel = tostring(panel.SelectedIdx) end)
+    log("focusrow ok=" .. tostring(ok) .. " err=" .. tostring(err)
+        .. " SelectedIdx=" .. sel)
 end
 
 --- Diagnostics: report the injected slider's range/value and the pending scale.
@@ -1025,6 +1078,10 @@ local function runCommand(line)
         rowState()
     elseif c == "uiscale_sliderinfo" then
         sliderInfo()
+    elseif c == "uiscale_watchnav" then
+        watchNav(parts[2])
+    elseif c == "uiscale_focusrow" then
+        focusRow()
     elseif c == "uiscale_enable" then
         enableRow()
     elseif c == "uiscale_selectindex" then
@@ -1142,6 +1199,49 @@ safe("hook SettingWidget:ChangeOption", function()
     log("hook ChangeOption registered")
 end)
 
+-- Controller navigation diagnostics (native focus functions).
+safe("hook nav functions", function()
+    local function afterChange(self, optionWidget)
+        local sel, idx, cn = "?", "?", "?"
+        pcall(function() sel = tostring(self.SelectedIdx) end)
+        pcall(function() cn = className(optionWidget) end)
+        pcall(function()
+            local wa = self.OptionWidgetArray
+            if wa ~= nil then
+                local target = fullName(optionWidget)
+                for i = 1, #wa do
+                    if isValid(wa[i]) and fullName(wa[i]) == target then idx = tostring(i) end
+                end
+            end
+        end)
+        log("nav ChangeSelectOption sel=" .. sel .. " idxInWA=" .. idx
+            .. " class=" .. tostring(cn))
+    end
+    RegisterHook("/Script/Librarian.SettingWidget:ChangeSelectOption",
+        function(self, optionWidget) end, afterChange)
+    local function readNum(p)
+        local v = nil
+        pcall(function() v = p:get() end)
+        if v == nil then
+            pcall(function() v = tonumber(p) end)
+        end
+        return v
+    end
+    RegisterHook("/Script/Librarian.SettingWidget:ScrollOptionList",
+        function(self, delta) end,
+        function(self, delta)
+            local sel = "?"
+            pcall(function() sel = tostring(self.SelectedIdx) end)
+            log("nav ScrollOptionList delta=" .. tostring(readNum(delta)) .. " sel=" .. sel)
+        end)
+    RegisterHook("/Script/Librarian.BasicWidget:ListScroll",
+        function(self, delta) end,
+        function(self, delta)
+            log("nav ListScroll delta=" .. tostring(readNum(delta)))
+        end)
+    log("nav hooks registered")
+end)
+
 -- Inject the UI Scale row whenever the Game Settings panel initialises.
 safe("hook SettingWidget:RefreshSettings", function()
     RegisterHook("/Script/Librarian.SettingWidget:RefreshSettings",
@@ -1253,7 +1353,8 @@ local function registerHooks(handlers)
         local path, post = h[1], h[2]
         if not hookedPaths[path] then
             local ok, err = pcall(function()
-                RegisterHook(path, function(self) end, function(self) post() end)
+                RegisterHook(path, function(self, ...) end,
+                    function(self, ...) post(self, ...) end)
             end)
             if ok then
                 hookedPaths[path] = true
@@ -1283,6 +1384,9 @@ local function registerOpenHooks()
                 pendingScale = currentScale
                 refreshRowDisplay(currentScale)
             end },
+        -- Navigation diagnostics: log the menu's scroll delta.
+        { "/Game/Librarian/UI/Options/SettingsMenuBP.SettingsMenuBP_C:ListScroll",
+            function(self, delta) log("nav SettingsMenu ListScroll delta=" .. tostring(delta)) end },
     })
 end
 
