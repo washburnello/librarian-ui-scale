@@ -62,6 +62,20 @@ tools/install-dev.sh     # install UE4SS + the mod into the local game
 tools/run-game.sh        # launch the game through Proton with the DLL override
 ```
 
+### Deploy to a Steam Deck over SSH
+
+With SSH enabled on the Deck (Desktop Mode), install the mod and set the Proton
+launch option in one step:
+
+```
+tools/deploy-deck.sh --launch-option        # default host: deck@steamdeck
+```
+
+This copies UE4SS + the mod into the Deck's game folder, enables the mod, and
+writes `WINEDLLOVERRIDES="dwmapi=n,b" %command%` into Steam's launch options
+(backing up `localconfig.vdf` first). Then launch the game normally and check
+`.../Librarian/Binaries/Win64/ue4ss/UE4SS.log` exists to confirm injection.
+
 The mod also exposes a file-driven command channel for debugging: write a line
 to `Scripts/cmd.txt` and it executes on the game thread (see
 `docs/REVERSE_ENGINEERING.md`).
