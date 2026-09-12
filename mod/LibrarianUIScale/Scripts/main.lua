@@ -88,11 +88,13 @@ local scaleTxt = scriptDir .. "scale.txt"
 
 local okConfig, config = pcall(require, "config")
 if not okConfig or type(config) ~= "table" then
-    config = { scale = 1.0, min = 1.0, max = 2.5, step = 0.1 }
+    config = { scale = 1.0, min = 0.25, max = 2.0, step = 0.25, menu_cap = 1.25 }
     log("config.lua not found or invalid, using defaults")
 end
 
 local currentScale = tonumber(config.scale) or 1.0
+-- Value selected with the slider but not yet committed via the game's Apply.
+local pendingScale = currentScale
 
 local function loadPersistedScale()
     local f = io.open(scaleTxt, "r")
@@ -203,9 +205,39 @@ local lastApplied = nil
 local menuOpen = false
 local MENU_SCALE_CAP = tonumber(config.menu_cap) or 1.25
 
---- Scale actually pushed to the engine. While the Settings menu is open this is
+--- Update the injected row's label/value text (does not apply the scale).
+local function refreshRowDisplay(v)
+    local row = _G.LibrarianUIScale_row
+    if not isValid(row) then return end
+    pcall(function()
+        row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(v)))
+    end)
+    pcall(function()
+        if isValid(row.Text_OptionValue) then
+            row.Text_OptionValue:SetText(makeText(scaleLabel(v)))
+        end
+    end)
+    pcall(function()
+        if isValid(row.EditableText_Value) then
+            row.EditableText_Value:SetText(makeText(string.format("%.2f", v)))
+        end
+    end)
+end
+
+--- Select a value with the slider. This does NOT change the UI yet: the janky
+--- feedback loop (scaling while dragging moves the mouse target) is avoided by
+--- committing only when the player presses the game's Apply button.
+local function setPendingScale(v)
+    v = clamp(v)
+    if math.abs(v - pendingScale) < 0.001 then return end
+    pendingScale = v
+    refreshRowDisplay(v)
+    log("UI Scale pending -> " .. scaleLabel(v) .. " (press Apply to commit)")
+end
+
+--- Scale actually pushed to the engine. While a full-screen menu is open this is
 --- capped, because a high scale makes the menu taller than the screen and its
---- controls (including this setting) get pushed off the bottom out of reach.
+--- controls get pushed off the bottom out of reach.
 local function effectiveScale()
     if menuOpen and currentScale > MENU_SCALE_CAP then
         return MENU_SCALE_CAP
@@ -230,31 +262,22 @@ end
 
 local function applyScale(v, persist, inline)
     currentScale = clamp(v)
+    pendingScale = currentScale
     lastApplied = currentScale
     pushApplicationScale(inline)
-    -- Keep the injected row in sync and refresh the indicator. It shows the
-    -- chosen value even while the menu is displayed at the capped scale.
-    local chosen = currentScale
     local row = _G.LibrarianUIScale_row
     if isValid(row) then
-        pcall(function() row.Option.OptionValue.FloatValue = chosen end)
-        pcall(function() row.Slider_Value:SetValue(chosen) end)
-        _G.LibrarianUIScale_lastSlider = chosen
-        pcall(function()
-            row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(chosen)))
-        end)
-        pcall(function()
-            if isValid(row.Text_OptionValue) then
-                row.Text_OptionValue:SetText(makeText(scaleLabel(chosen)))
-            end
-        end)
-        pcall(function()
-            if isValid(row.EditableText_Value) then
-                row.EditableText_Value:SetText(makeText(string.format("%.2f", chosen)))
-            end
-        end)
+        pcall(function() row.Option.OptionValue.FloatValue = currentScale end)
+        pcall(function() row.Slider_Value:SetValue(currentScale) end)
     end
-    if persist ~= false then persistScale(chosen) end
+    refreshRowDisplay(currentScale)
+    if persist ~= false then persistScale(currentScale) end
+    log("UI Scale applied -> " .. scaleLabel(currentScale))
+end
+
+--- Commit the pending value (called from the game's Apply button).
+local function commitPendingScale()
+    applyScale(pendingScale, true, false)
 end
 
 -- ---------------------------------------------------------------------------
@@ -446,24 +469,10 @@ local function createScaleRow(panel)
             row.Slider_Value:SetValue(currentScale)
         end)
     end
-    -- The row may not accept SetValue until it is fully constructed, so the
-    -- poll initialises it (and only then starts treating it as user input).
-    _G.LibrarianUIScale_sliderReady = false
-    _G.LibrarianUIScale_readyCount = 0
-    _G.LibrarianUIScale_lastSlider = currentScale
-    if isValid(row.Text_OptionName) then
-        pcall(function()
-            row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(currentScale)))
-        end)
-    end
-    if isValid(row.Text_OptionValue) then
-        pcall(function() row.Text_OptionValue:SetText(makeText(scaleLabel(currentScale))) end)
-    end
-    if isValid(row.EditableText_Value) then
-        pcall(function()
-            row.EditableText_Value:SetText(makeText(string.format("%.2f", currentScale)))
-        end)
-    end
+    -- Reset any in-progress preview for the freshly created row.
+    pendingScale = currentScale
+    _G.LibrarianUIScale_lastRawSlider = nil
+    refreshRowDisplay(currentScale)
     log("addrow: float row ready")
     return row
 end
@@ -622,6 +631,22 @@ local function enableRow()
     if n then pcall(function() row.Button_NextOption:SetIsEnabled(true) end) end
     if p then pcall(function() row.Button_PreOption:SetIsEnabled(true) end) end
     log("enablerow: setEnabled, buttons next=" .. tostring(n) .. " pre=" .. tostring(p))
+end
+
+--- Diagnostics: report the injected slider's range/value and the pending scale.
+local function sliderInfo()
+    local row = _G.LibrarianUIScale_row
+    if not isValid(row) then
+        log("sliderinfo: no row")
+        return
+    end
+    local v, mn, mx, applied = "?", "?", "?", "?"
+    pcall(function() v = tostring(row.Slider_Value:GetValue()) end)
+    pcall(function() mn = tostring(row.Slider_Value:GetMinValue()) end)
+    pcall(function() mx = tostring(row.Slider_Value:GetMaxValue()) end)
+    pcall(function() applied = tostring(readScale()) end)
+    log(string.format("sliderinfo value=%s min=%s max=%s | pending=%.2f chosen=%.2f engine=%s",
+        v, mn, mx, pendingScale, currentScale, applied))
 end
 
 --- Diagnostics: dump the game's focus arrays.
@@ -998,6 +1023,8 @@ local function runCommand(line)
         focusInfo()
     elseif c == "uiscale_rowstate" then
         rowState()
+    elseif c == "uiscale_sliderinfo" then
+        sliderInfo()
     elseif c == "uiscale_enable" then
         enableRow()
     elseif c == "uiscale_selectindex" then
@@ -1084,10 +1111,10 @@ safe("hook SettingWidget:ChangeOptionFlt", function()
                 if ok then name = s end
             end
             if tostring(name) == UI_SCALE_NAME then
-                local d = tonumber(delta) or 0
-                log(string.format("hook ChangeOptionFlt '%s' delta=%s", tostring(name), tostring(delta)))
-                applyScale(currentScale + d, false, true)
-                pcall(function() returnValue.FloatValue = currentScale end)
+                -- Preview only; the value is committed by the Apply button.
+                log(string.format("hook ChangeOptionFlt '%s' delta=%s (preview)",
+                    tostring(name), tostring(delta)))
+                pcall(function() returnValue.FloatValue = pendingScale end)
             end
         end)
     log("hook ChangeOptionFlt registered")
@@ -1103,17 +1130,13 @@ safe("hook SettingWidget:ChangeOption", function()
                 if ok then name = s end
             end
             if tostring(name) == UI_SCALE_NAME then
-                local d = tonumber(delta) or 0
-                local idx = nearestScaleIndex(currentScale) - 1 + d
-                if idx < 0 then idx = 0 end
-                if idx > #UI_SCALE_VALUES - 1 then idx = #UI_SCALE_VALUES - 1 end
-                local newScale = UI_SCALE_VALUES[idx + 1]
-                log(string.format("hook ChangeOption '%s' delta=%s -> %.2f",
-                    tostring(name), tostring(delta), newScale))
-                applyScale(newScale, true, true)
+                -- Preview only; the value is committed by the Apply button.
+                local idx = nearestScaleIndex(pendingScale) - 1
+                log(string.format("hook ChangeOption '%s' delta=%s (preview)",
+                    tostring(name), tostring(delta)))
                 pcall(function() returnValue.IntValue = idx end)
-                pcall(function() returnValue.FloatValue = newScale end)
-                pcall(function() returnValue.TextValue = makeText(scaleLabel(newScale)) end)
+                pcall(function() returnValue.FloatValue = pendingScale end)
+                pcall(function() returnValue.TextValue = makeText(scaleLabel(pendingScale)) end)
             end
         end)
     log("hook ChangeOption registered")
@@ -1131,6 +1154,22 @@ safe("hook SettingWidget:RefreshSettings", function()
             end)
         end)
     log("hook RefreshSettings registered")
+end)
+
+-- Commit the previewed scale when the player presses Apply, and reset our value
+-- when they press Reset. Cancel/close is handled by the menu-open watcher.
+safe("hook SettingsMenu Apply/Reset", function()
+    RegisterHook("/Script/Librarian.SettingsMenu:ApplySettings",
+        function(self, needChangeRes) end,
+        function(self, needChangeRes)
+            pcall(function() commitPendingScale() end)
+        end)
+    RegisterHook("/Script/Librarian.SettingsMenu:ResetSettings",
+        function(self) end,
+        function(self)
+            pcall(function() setPendingScale(1.0) end)
+        end)
+    log("hook Apply/Reset registered")
 end)
 
 -- ---------------------------------------------------------------------------
@@ -1209,24 +1248,42 @@ end
 -- Blueprint functions are not loaded when the mod starts, so register these
 -- lazily (once the game classes exist) and isolate each one.
 local hookedPaths = {}
-local function registerOpenHooks()
-    local handlers = {
-        "/Game/Librarian/UI/Title/WBP_Title.WBP_Title_C:BndEvt__WBP_Title_Button_Options_K2Node_ComponentBoundEvent_1_OnButtonPressedEvent__DelegateSignature",
-        "/Game/Librarian/UI/Title/WBP_PauseMenu.WBP_PauseMenu_C:BndEvt__WBP_PauseMenu_Button_Option_K2Node_ComponentBoundEvent_1_OnButtonClickedEvent__DelegateSignature",
-    }
-    for _, path in ipairs(handlers) do
+local function registerHooks(handlers)
+    for _, h in ipairs(handlers) do
+        local path, post = h[1], h[2]
         if not hookedPaths[path] then
             local ok, err = pcall(function()
-                RegisterHook(path, function(self) end, function(self) scheduleInject(50) end)
+                RegisterHook(path, function(self) end, function(self) post() end)
             end)
             if ok then
                 hookedPaths[path] = true
-                log("hooked open handler: " .. path)
+                log("hooked: " .. path)
             else
                 log("could not hook " .. path .. ": " .. tostring(err))
             end
         end
     end
+end
+
+local function registerOpenHooks()
+    registerHooks({
+        -- Open Options (title + pause menu): inject the row immediately.
+        { "/Game/Librarian/UI/Title/WBP_Title.WBP_Title_C:BndEvt__WBP_Title_Button_Options_K2Node_ComponentBoundEvent_1_OnButtonPressedEvent__DelegateSignature",
+            function() scheduleInject(50) end },
+        { "/Game/Librarian/UI/Title/WBP_PauseMenu.WBP_PauseMenu_C:BndEvt__WBP_PauseMenu_Button_Option_K2Node_ComponentBoundEvent_1_OnButtonClickedEvent__DelegateSignature",
+            function() scheduleInject(50) end },
+        -- Settings buttons: Apply commits the previewed scale, Reset returns it
+        -- to 1.0, Cancel discards the preview.
+        { "/Game/Librarian/UI/Options/SettingsMenuBP.SettingsMenuBP_C:BndEvt__SettingsMenuBP_Button_1_K2Node_ComponentBoundEvent_0_OnButtonClickedEvent__DelegateSignature",
+            function() commitPendingScale() end },
+        { "/Game/Librarian/UI/Options/SettingsMenuBP.SettingsMenuBP_C:BndEvt__SettingsMenuBP_Button_Reset_K2Node_ComponentBoundEvent_3_OnButtonClickedEvent__DelegateSignature",
+            function() setPendingScale(1.0) end },
+        { "/Game/Librarian/UI/Options/SettingsMenuBP.SettingsMenuBP_C:BndEvt__SettingsMenuBP_Button_Cancel_K2Node_ComponentBoundEvent_1_OnButtonClickedEvent__DelegateSignature",
+            function()
+                pendingScale = currentScale
+                refreshRowDisplay(currentScale)
+            end },
+    })
 end
 
 -- Fast poll. The Settings panel is cached so this only costs a couple of cheap
@@ -1248,6 +1305,17 @@ LoopAsync(150, function()
     end
     if menuVisible ~= menuOpen then
         menuOpen = menuVisible
+        if menuOpen then
+            -- Opening: preview starts from the currently applied value.
+            setPendingScale(currentScale)
+        else
+            -- Closing without Apply: discard the preview (Cancel/back).
+            if math.abs(pendingScale - currentScale) > 0.001 then
+                log("settings menu closed without Apply -> discarding preview")
+                pendingScale = currentScale
+                refreshRowDisplay(currentScale)
+            end
+        end
         pushApplicationScale(false)
         log("settings menu " .. (menuOpen and "opened" or "closed")
             .. " -> ApplicationScale " .. string.format("%.2f", effectiveScale()))
@@ -1272,35 +1340,27 @@ LoopAsync(150, function()
     return false
 end)
 
--- Apply changes the player makes with the row's slider, snapped to the 0.25
--- steps. Only reacts when the slider differs from the value we last set, so the
--- slider's default value is never mistaken for user input.
+-- The slider is configured to the same 0.25..2.00 range as our table (verified:
+-- it holds and returns 1.5), but its MinValue/MaxValue getters are unreadable
+-- through UE4SS, so we map its raw value directly to the nearest table entry
+-- rather than normalising.
+local function sliderToScale(raw)
+    return UI_SCALE_VALUES[nearestScaleIndex(raw)]
+end
+
+-- Preview the slider value in the row only. Nothing is applied until the player
+-- presses the game's Apply button (commitPendingScale), which avoids the janky
+-- feedback loop where scaling during a drag moves the mouse target.
 LoopAsync(200, function()
     local row = _G.LibrarianUIScale_row
     if isValid(row) and isValid(row.Slider_Value) then
-        if not _G.LibrarianUIScale_sliderReady then
-            -- Initialise the slider to the current scale and wait until it holds
-            -- that value for several ticks (the game resets it once while the
-            -- row finishes constructing) before trusting it as user input.
-            pcall(function() row.Slider_Value:SetValue(currentScale) end)
-            local check = nil
-            pcall(function() check = row.Slider_Value:GetValue() end)
-            if check and math.abs(check - currentScale) < 0.001 then
-                _G.LibrarianUIScale_readyCount = (_G.LibrarianUIScale_readyCount or 0) + 1
-                if _G.LibrarianUIScale_readyCount >= 3 then
-                    _G.LibrarianUIScale_sliderReady = true
-                    _G.LibrarianUIScale_lastSlider = currentScale
-                end
-            else
-                _G.LibrarianUIScale_readyCount = 0
-            end
-        else
-            local v = nil
-            pcall(function() v = row.Slider_Value:GetValue() end)
-            local last = _G.LibrarianUIScale_lastSlider
-            if v and (last == nil or math.abs(v - last) > 0.001) then
-                local snapped = UI_SCALE_VALUES[nearestScaleIndex(v)]
-                applyScale(snapped, true, false)
+        local raw = nil
+        pcall(function() raw = row.Slider_Value:GetValue() end)
+        if raw then
+            local last = _G.LibrarianUIScale_lastRawSlider
+            if last == nil or math.abs(raw - last) > 0.001 then
+                _G.LibrarianUIScale_lastRawSlider = raw
+                setPendingScale(sliderToScale(raw))
             end
         end
     end
