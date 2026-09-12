@@ -89,21 +89,25 @@ the option's display name.
 
 ### Injection method used by this mod
 
-1. Create a new row from the game's arrow-button row class
-   (`OptionUMG_Text`), which renders next/previous buttons:
+1. Create a new row from the game's float row class (`OptionUMG_Float`):
 
    ```lua
    local lib = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
-   local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Text.OptionUMG_Text_C")
+   local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Float.OptionUMG_Float_C")
    local row = lib:Create(panel, rowClass, FindFirstOf("PlayerController"))
    ```
 
-2. Configure `row.Option`: `Name`, `OptionValue.IntValue` (0-based index),
-   `OptionValue.OptionNum` (count), and `TextValue`. Set the label to include
-   the current scale (`row.Text_OptionName:SetText("UI Scale: 1.50x")`). Unlike
-   the enum row, the text row's value cell reads `OptionValue.TextValue` rather
-   than an `ExtraTextArray` label, so it does not show "Invalid" and its
-   `Text_OptionValue` is a valid text block.
+   `OptionUMG_Float` is the only row type that renders with the correct (bright)
+   style when created at runtime. The arrow rows (`OptionUMG_Text`,
+   `OptionUMG_Enum`) stay dimmed/disabled because the game initialises their
+   state from data it builds itself; populating their `ExtraTextArray` from Lua
+   also freezes the game (see crash hazards).
+
+2. Configure `row.Option` (`Name`, `ValueMinMax`, `DefaultFltValue`,
+   `OptionValue.FloatValue`), set the slider min/max/step/value, and set the
+   label to include the current scale
+   (`row.Text_OptionName:SetText("UI Scale: 1.50x")`) plus the numeric box
+   (`row.EditableText_Value`). The slider is snapped to 0.25 steps by the poll.
 3. Add it: `panel.OptionsBox:AddChild(row)`.
 4. The game's own change path does not know a "UI Scale" setting. Both paths are
    intercepted: `USettingWidget:ChangeOptionFlt` (float rows) and

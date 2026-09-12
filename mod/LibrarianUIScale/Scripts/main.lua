@@ -219,14 +219,20 @@ local function applyScale(v, persist, inline)
     -- (hotkeys / config), and refresh the on-screen indicator.
     local row = _G.LibrarianUIScale_row
     if isValid(row) then
-        pcall(function() row.Option.OptionValue.IntValue = nearestScaleIndex(v) - 1 end)
-        pcall(function() row.Option.OptionValue.TextValue = makeText(scaleLabel(v)) end)
+        pcall(function() row.Option.OptionValue.FloatValue = v end)
+        pcall(function() row.Slider_Value:SetValue(v) end)
+        _G.LibrarianUIScale_lastSlider = v
         pcall(function()
             row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(v)))
         end)
         pcall(function()
             if isValid(row.Text_OptionValue) then
                 row.Text_OptionValue:SetText(makeText(scaleLabel(v)))
+            end
+        end)
+        pcall(function()
+            if isValid(row.EditableText_Value) then
+                row.EditableText_Value:SetText(makeText(string.format("%.2f", v)))
             end
         end)
     end
@@ -381,54 +387,66 @@ local function getPropPath(classSubstr, path)
     end
 end
 
---- Create and configure a fresh UI Scale row (does NOT attach it). Uses the
---- game's enum row so the value is chosen with left/right arrow buttons.
+--- Create and configure a fresh UI Scale row (does NOT attach it).
+---
+--- Uses the game's float row: it is the only row type that renders with the
+--- correct (bright) style when created at runtime. Arrow rows (enum/text) stay
+--- dimmed/disabled unless their FOptionData is built by the game, and populating
+--- the enum label array from Lua corrupts memory and freezes the game.
+--- The float slider is snapped to the 0.25 steps by the poll below.
 local function createScaleRow(panel)
     local lib = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
     if not isValid(lib) then
         log("addrow: UWidgetBlueprintLibrary not found")
         return nil
     end
-    local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Text.OptionUMG_Text_C")
+    local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Float.OptionUMG_Float_C")
     local pc = FindFirstOf("PlayerController")
     local row = nil
     local ok, err = pcall(function() row = lib:Create(panel, rowClass, pc) end)
     log("addrow: create ok=" .. tostring(ok) .. " err=" .. tostring(err))
     if not isValid(row) then return nil end
-    log("addrow: step0 created")
 
     pcall(function() row.ParentWidget = panel end)
-    log("addrow: step1 parent")
-
-    local idx = nearestScaleIndex(currentScale)
     local option = nil
     pcall(function() option = row.Option end)
     pcall(function()
         option.Name = makeText(UI_SCALE_NAME)
-        option.DefaultIntValue = idx - 1
-        option.OptionValue.IntValue = idx - 1
-        option.OptionValue.OptionNum = #UI_SCALE_VALUES
-        option.OptionValue.TextValue = makeText(scaleLabel(currentScale))
-        option.CanDirectEdit = false
+        option.ValueMinMax.X = UI_SCALE_VALUES[1]
+        option.ValueMinMax.Y = UI_SCALE_VALUES[#UI_SCALE_VALUES]
+        option.DefaultFltValue = currentScale
+        option.OffsetValue = 0.25
+        option.OptionValue.FloatValue = currentScale
         row.Option = option
     end)
-    log("addrow: step2 option")
 
-    local iv = "?"
-    pcall(function() iv = tostring(row.Option.OptionValue.IntValue) end)
-    log("addrow: step3 intValue=" .. iv)
-
+    if isValid(row.Slider_Value) then
+        pcall(function()
+            row.Slider_Value:SetMinValue(UI_SCALE_VALUES[1])
+            row.Slider_Value:SetMaxValue(UI_SCALE_VALUES[#UI_SCALE_VALUES])
+            row.Slider_Value:SetStepSize(0.25)
+            row.Slider_Value:SetValue(currentScale)
+        end)
+    end
+    -- The row may not accept SetValue until it is fully constructed, so the
+    -- poll initialises it (and only then starts treating it as user input).
+    _G.LibrarianUIScale_sliderReady = false
+    _G.LibrarianUIScale_readyCount = 0
+    _G.LibrarianUIScale_lastSlider = currentScale
     if isValid(row.Text_OptionName) then
         pcall(function()
             row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(currentScale)))
         end)
     end
-    local hasValueText = false
-    pcall(function() hasValueText = isValid(row.Text_OptionValue) end)
-    if hasValueText then
+    if isValid(row.Text_OptionValue) then
         pcall(function() row.Text_OptionValue:SetText(makeText(scaleLabel(currentScale))) end)
     end
-    log("addrow: step4 name, valueText=" .. tostring(hasValueText))
+    if isValid(row.EditableText_Value) then
+        pcall(function()
+            row.EditableText_Value:SetText(makeText(string.format("%.2f", currentScale)))
+        end)
+    end
+    log("addrow: float row ready")
     return row
 end
 
@@ -491,7 +509,8 @@ local function addRow()
     attachRow(firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget"))
 end
 
---- Set the injected row's selected scale (simulates the arrow buttons).
+--- Set the injected row's slider value (simulates the player moving it) so the
+--- whole change path can be tested without input.
 local function setScale(value)
     value = tonumber(value)
     if not value then
@@ -499,18 +518,16 @@ local function setScale(value)
         return
     end
     local row = _G.LibrarianUIScale_row
-    if not isValid(row) then
-        row = firstLiveObject(UI_SCALE_NAME, "/Script/Librarian.OptionWidgetBase_Enum")
-    end
-    if not isValid(row) then
+    if not isValid(row) or not isValid(row.Slider_Value) then
         log("uiscale_set: UI Scale row not found")
         return
     end
-    local idx = nearestScaleIndex(value)
-    pcall(function() row.Option.OptionValue.IntValue = idx - 1 end)
-    local iv = "?"
-    pcall(function() iv = tostring(row.Option.OptionValue.IntValue) end)
-    log(string.format("uiscale_set %.2f -> idx=%d intValue=%s", value, idx, iv))
+    local snapped = UI_SCALE_VALUES[nearestScaleIndex(value)]
+    pcall(function() row.Slider_Value:SetValue(snapped) end)
+    pcall(function() row.Option.OptionValue.FloatValue = snapped end)
+    local after = "?"
+    pcall(function() after = tostring(row.Slider_Value:GetValue()) end)
+    log(string.format("uiscale_set %.2f -> set=%.2f read=%s", value, snapped, after))
 end
 
 --- Report injection/visibility state (diagnostics).
@@ -544,6 +561,49 @@ local function selectRow()
     pcall(function() idx = tostring(panel.SelectOptionIdx) end)
     log("select: ChangeSelectOption ok=" .. tostring(ok) .. " err=" .. tostring(err)
         .. " SelectOptionIdx=" .. idx)
+end
+
+--- Compare our row's enabled/visibility state with a built-in row.
+local function rowState()
+    local row = _G.LibrarianUIScale_row
+    if not isValid(row) then
+        log("rowstate: no row")
+        return
+    end
+    local en, vis = "?", "?"
+    pcall(function() en = tostring(row:IsEnabled()) end)
+    pcall(function() vis = tostring(row:GetVisibility()) end)
+    log("rowstate ours: enabled=" .. en .. " visibility=" .. vis)
+    local panel = _G.LibrarianUIScale_panel
+    local wa = nil
+    pcall(function() wa = panel.OptionWidgetArray end)
+    if wa ~= nil then
+        local e = nil
+        pcall(function() e = wa[6] end)
+        if isValid(e) then
+            local en2, vis2 = "?", "?"
+            pcall(function() en2 = tostring(e:IsEnabled()) end)
+            pcall(function() vis2 = tostring(e:GetVisibility()) end)
+            log("rowstate builtin: enabled=" .. en2 .. " visibility=" .. vis2)
+        end
+    end
+end
+
+--- Try to force our row (and its arrow buttons) to be enabled/visible.
+local function enableRow()
+    local row = _G.LibrarianUIScale_row
+    if not isValid(row) then
+        log("enablerow: no row")
+        return
+    end
+    pcall(function() row:SetIsEnabled(true) end)
+    pcall(function() row:SetVisibility(0) end)
+    local n, p = false, false
+    pcall(function() n = isValid(row.Button_NextOption) end)
+    pcall(function() p = isValid(row.Button_PreOption) end)
+    if n then pcall(function() row.Button_NextOption:SetIsEnabled(true) end) end
+    if p then pcall(function() row.Button_PreOption:SetIsEnabled(true) end) end
+    log("enablerow: setEnabled, buttons next=" .. tostring(n) .. " pre=" .. tostring(p))
 end
 
 --- Diagnostics: dump the game's focus arrays.
@@ -918,6 +978,10 @@ local function runCommand(line)
         selectRow()
     elseif c == "uiscale_focusinfo" then
         focusInfo()
+    elseif c == "uiscale_rowstate" then
+        rowState()
+    elseif c == "uiscale_enable" then
+        enableRow()
     elseif c == "uiscale_selectindex" then
         selectIndex(parts[2])
 
@@ -1172,16 +1236,36 @@ LoopAsync(150, function()
     return false
 end)
 
--- Apply changes the player makes with the row's arrow buttons (which update
--- the enum index), and keep the on-screen indicator in sync.
+-- Apply changes the player makes with the row's slider, snapped to the 0.25
+-- steps. Only reacts when the slider differs from the value we last set, so the
+-- slider's default value is never mistaken for user input.
 LoopAsync(200, function()
     local row = _G.LibrarianUIScale_row
-    if isValid(row) then
-        local iv = nil
-        pcall(function() iv = tonumber(row.Option.OptionValue.IntValue) end)
-        local scale = iv and UI_SCALE_VALUES[iv + 1]
-        if scale and math.abs(scale - currentScale) > 0.001 then
-            applyScale(scale, true, false)
+    if isValid(row) and isValid(row.Slider_Value) then
+        if not _G.LibrarianUIScale_sliderReady then
+            -- Initialise the slider to the current scale and wait until it holds
+            -- that value for several ticks (the game resets it once while the
+            -- row finishes constructing) before trusting it as user input.
+            pcall(function() row.Slider_Value:SetValue(currentScale) end)
+            local check = nil
+            pcall(function() check = row.Slider_Value:GetValue() end)
+            if check and math.abs(check - currentScale) < 0.001 then
+                _G.LibrarianUIScale_readyCount = (_G.LibrarianUIScale_readyCount or 0) + 1
+                if _G.LibrarianUIScale_readyCount >= 3 then
+                    _G.LibrarianUIScale_sliderReady = true
+                    _G.LibrarianUIScale_lastSlider = currentScale
+                end
+            else
+                _G.LibrarianUIScale_readyCount = 0
+            end
+        else
+            local v = nil
+            pcall(function() v = row.Slider_Value:GetValue() end)
+            local last = _G.LibrarianUIScale_lastSlider
+            if v and (last == nil or math.abs(v - last) > 0.001) then
+                local snapped = UI_SCALE_VALUES[nearestScaleIndex(v)]
+                applyScale(snapped, true, false)
+            end
         end
     end
     return false

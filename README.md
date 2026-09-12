@@ -11,8 +11,8 @@ modified; the mod is a Lua script that runs at runtime.
 
 - ✅ Global UI scaling works and is applied live (`UUserInterfaceSettings.ApplicationScale`).
 - ✅ A `UI Scale` row is injected into **Settings → Game Settings** using the
-  game's own arrow-button (text) row. It steps **0.25×–3.00× in 0.25 steps**, and
-  the row label shows the current value (e.g. `UI Scale: 1.50x`).
+  game's float row. The slider **snaps to 0.25×–3.00× in 0.25 steps**, and the
+  row shows the current value (e.g. `UI Scale: 1.50x`).
 - ✅ The chosen value is remembered between sessions.
 - ✅ The row is re-injected if the Settings menu is closed and reopened.
 - ✅ The row is registered in the game's controller-focus list so a gamepad can
@@ -43,7 +43,8 @@ Then launch the game and open **Settings**. A `UE4SS.log` appearing next to
 
 ## Usage
 
-- Open **Settings → Game Settings** and use the **UI Scale** arrows.
+- Open **Settings → Game Settings** and use the **UI Scale** slider (it snaps to
+  the 0.25 steps; left/right on a controller works when the row is focused).
 - `1.00x` is vanilla; the range is `0.25x`–`3.00x` in `0.25` steps.
 - The row label shows the current scale.
 - The value is saved to `Scripts/scale.txt` and re-applied on the next launch.
