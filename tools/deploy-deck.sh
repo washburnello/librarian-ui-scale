@@ -57,7 +57,15 @@ REMOTE
 
 if [[ "$SET_LAUNCH_OPTION" == "1" ]]; then
   echo "==> Setting Steam launch option ..."
-  if ssh "$DECK_HOST" "python3 -" < "$REPO_ROOT/tools/set-deck-launch-option.py"; then
+  # Steam overwrites localconfig.vdf from memory while it is running, so the
+  # file edit only sticks if the client is closed first.
+  if ssh "$DECK_HOST" "pgrep -x steam >/dev/null"; then
+    echo "  Steam is RUNNING on the Deck, so it will overwrite this change."
+    echo "  Set it in the Steam UI instead (recommended):"
+    echo "    Librarian > gear/Properties > Launch Options:"
+    echo '      WINEDLLOVERRIDES="dwmapi=n,b" %command%'
+    echo "  Or close Steam first, then re-run this script."
+  elif ssh "$DECK_HOST" "python3 -" < "$REPO_ROOT/tools/set-deck-launch-option.py"; then
     echo "  Launch option set."
   else
     echo "  Could not set it automatically — set it in Steam manually:"
