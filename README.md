@@ -13,7 +13,9 @@ modified; the mod is a Lua script that runs at runtime.
 - ✅ A `UI Scale` row (1.0×–2.0×) is injected into **Settings → Game Settings** using the game's own float-row widget, showing the current value.
 - ✅ The chosen value is remembered between sessions.
 - ✅ The row is re-injected if the Settings menu is closed and reopened.
-- ⏳ Gamepad focus/navigation of the injected row is not finished yet; mouse dragging works.
+- ✅ The row is registered in the game's controller-focus list so a gamepad can
+  reach it (implemented and verified via the game's own navigation events, but
+  not yet tried on a physical controller).
 
 See [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md) for how it
 works.

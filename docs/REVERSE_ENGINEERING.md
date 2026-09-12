@@ -107,6 +107,15 @@ the option's display name.
    changes. This avoids relying on UMG delegate binding from Lua.
 5. Persist the value in `Scripts/scale.txt`; re-apply on startup.
 
+**Controller focus:** the game drives controller navigation over its own
+`UBasicWidget` lists (`OptionWidgetArray`, `OptionList`) and BP events
+(`SelectOptionBP(oldIdx,newIdx)`). To be reachable, the injected row is
+**appended** to `OptionWidgetArray` (and `OptionList`) — never inserted at the
+front, which shifted indices and crashed the game. The row is then the last
+entry (index 8 in Game Settings) and is reachable by pressing Down past the
+last built-in option. Re-attaching on reopen reuses the same row object so the
+list entry stays valid, and a duplicate check keeps it from being added twice.
+
 **Timing:** opening the menu is detected by post-hooks on the title and pause
 "Options" button handlers (registered lazily, because Blueprint UFunctions are
 not loaded at mod start). A 150 ms poll is the fallback. An earlier 700 ms poll
@@ -138,7 +147,10 @@ game with `EXCEPTION_ACCESS_VIOLATION` (C0000005) when the Settings menu
 opened or rebuilt:
 
 - Iterating the panel's widget children (`OptionsBox:GetChildrenCount/GetChildAt`)
-  and reading `Text_OptionName` / calling `GetText()` on them.
+  and reading `Text_OptionName` / calling `GetText()` on them. Reading a child's
+  text (e.g. `row.EditableText_Value:GetText()`) also froze the game even inside
+  `pcall`, so the mod never reads its row's child widgets — it only writes to
+  them, guarded by `IsValid`.
 - Adding the injected row to the game's `OptionWidgetArray` / `OptionList`
   (the game dereferences those assuming its own managed widgets).
 - Calling the panel's `RefreshSettings` / `ActiveInit` after modifying

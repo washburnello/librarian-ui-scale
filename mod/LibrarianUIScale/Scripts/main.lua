@@ -387,32 +387,21 @@ local function installOption()
     log("install: ActiveInit ok=" .. tostring(okA) .. " err=" .. tostring(errA))
 end
 
---- Fallback: create an OptionUMG_Float row directly and add it to the panel's
---- scroll box, bypassing the panel's own row builder.
-local function injectRowInto(panel)
-    if not isValid(panel) then
-        log("addrow: panel not valid")
-        return
-    end
-    -- Re-inject whenever our row is gone (the game rebuilds the panel when
-    -- Settings is closed and reopened, destroying the row). We only ever touch
-    -- our own objects here: iterating the game's widgets from Lua has been
-    -- observed to crash the game (C0000005 / EXCEPTION_ACCESS_VIOLATION).
-    if isValid(_G.LibrarianUIScale_row) then
-        return
-    end
+--- Create and configure a fresh UI Scale row (does NOT attach it).
+local function createScaleRow(panel)
     local lib = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
     if not isValid(lib) then
         log("addrow: UWidgetBlueprintLibrary not found")
-        return
+        return nil
     end
     local rowClass = StaticFindObject("/Game/Librarian/UI/Options/OptionUMG_Float.OptionUMG_Float_C")
     local pc = FindFirstOf("PlayerController")
     local row = nil
     local ok, err = pcall(function() row = lib:Create(panel, rowClass, pc) end)
-    log("addrow: create ok=" .. tostring(ok) .. " row=" .. tostring(row) .. " err=" .. tostring(err))
-    if not isValid(row) then return end
+    log("addrow: create ok=" .. tostring(ok) .. " err=" .. tostring(err))
+    if not isValid(row) then return nil end
 
+    pcall(function() row.ParentWidget = panel end)
     local option = nil
     pcall(function() option = row.Option end)
     pcall(function()
@@ -422,40 +411,24 @@ local function injectRowInto(panel)
         option.DefaultFltValue = currentScale
         option.OptionValue.FloatValue = currentScale
         row.Option = option
-        -- The row applies changes through its ParentWidget (the SettingWidget).
-        row.ParentWidget = panel
     end)
-    local okc, errc = pcall(function() row:CreateContentBP(row.Option) end)
-    log("addrow: CreateContentBP ok=" .. tostring(okc) .. " err=" .. tostring(errc))
+    pcall(function() row:CreateContentBP(row.Option) end)
 
-    -- Populate the row's own widgets directly (CreateContentBP alone did not).
-    local haveName, haveSlider, haveValue = false, false, false
-    pcall(function() haveName = isValid(row.Text_OptionName) end)
-    pcall(function() haveSlider = isValid(row.Slider_Value) end)
-    pcall(function() haveValue = isValid(row.Text_OptionValue) end)
-    log(string.format("addrow: children name=%s slider=%s value=%s",
-        tostring(haveName), tostring(haveSlider), tostring(haveValue)))
-
-    if haveName then
+    if isValid(row.Text_OptionName) then
         pcall(function() row.Text_OptionName:SetText(makeText(UI_SCALE_NAME)) end)
     end
-    if haveValue then
-        pcall(function() row.Text_OptionValue:SetText(makeText(string.format("%.2fx", currentScale))) end)
+    if isValid(row.Text_OptionValue) then
+        pcall(function() row.Text_OptionValue:SetText(makeText(string.format("%.1fx", currentScale))) end)
     end
-    if haveSlider then
+    if isValid(row.Slider_Value) then
         pcall(function()
             row.Slider_Value:SetMinValue(UI_SCALE_MIN)
             row.Slider_Value:SetMaxValue(UI_SCALE_MAX)
             row.Slider_Value:SetStepSize(UI_SCALE_STEP)
             row.Slider_Value:SetValue(currentScale)
         end)
-        local mn, mx, val = "?", "?", "?"
-        pcall(function() mn = tostring(row.Slider_Value:GetMinValue()) end)
-        pcall(function() mx = tostring(row.Slider_Value:GetMaxValue()) end)
-        pcall(function() val = tostring(row.Slider_Value:GetValue()) end)
-        log(string.format("addrow: slider min=%s max=%s value=%s", mn, mx, val))
     end
-    -- Show the current multiplier in the row's editable value field, if any.
+
     if isValid(row.EditableText_Value) then
         pcall(function() row.EditableText_Value:SetText(makeText(string.format("%.1f", currentScale))) end)
     end
@@ -463,32 +436,66 @@ local function injectRowInto(panel)
         local pct = (currentScale - UI_SCALE_MIN) / (UI_SCALE_MAX - UI_SCALE_MIN)
         pcall(function() row.ProgressBar_Value:SetPercent(pct) end)
     end
+    return row
+end
 
+local function arrayHas(arr, row)
+    local n = 0
+    pcall(function() n = #arr end)
+    local target = fullName(row)
+    for i = 1, n do
+        local e = arr[i]
+        if isValid(e) and fullName(e) == target then return true end
+    end
+    return false
+end
+
+--- Register the row in the game's controller-focus lists. Append-only (never
+--- insert at the front, which shifted indices and crashed the game) and guarded
+--- against duplicates so re-attaching on reopen does not add it twice.
+local function registerFocus(panel, row)
+    if config.focus == false then return end
+    local widgetArr, listArr = nil, nil
+    local okW = pcall(function() widgetArr = panel.OptionWidgetArray end)
+    local okL = pcall(function() listArr = panel.OptionList end)
+    local addedW, addedL = false, false
+    if okW and widgetArr ~= nil and not arrayHas(widgetArr, row) then
+        addedW = pcall(function() table.insert(widgetArr, row) end)
+    end
+    if okL and listArr ~= nil and not arrayHas(listArr, row) then
+        addedL = pcall(function() table.insert(listArr, row) end)
+    end
+    log(string.format("focus: OptionWidgetArray=%s(+%s) OptionList=%s(+%s)",
+        tostring(okW), tostring(addedW), tostring(okL), tostring(addedL)))
+end
+
+--- Ensure our row exists and is attached to the panel. Reuses the existing row
+--- object when possible so focus-list membership stays valid across a
+--- close/reopen (the row survives but is orphaned).
+local function attachRow(panel)
+    if not isValid(panel) then return end
     local box = nil
     pcall(function() box = panel.OptionsBox end)
     if not isValid(box) then
         log("addrow: OptionsBox not found")
         return
     end
-    -- AddChild is the proven-safe path; InsertChildAt and touching the game's
-    -- OptionWidgetArray were both observed to crash the game.
-    local oka, erra = pcall(function() box:AddChild(row) end)
-    log("addrow: AddChild ok=" .. tostring(oka) .. " err=" .. tostring(erra))
-    -- Try to bring it into view without reordering the list.
+    local row = _G.LibrarianUIScale_row
+    if isValid(row) then
+        pcall(function() box:AddChild(row) end)
+    else
+        row = createScaleRow(panel)
+        if not isValid(row) then return end
+        pcall(function() box:AddChild(row) end)
+        _G.LibrarianUIScale_row = row
+        _G.LibrarianUIScale_panel = panel
+    end
     pcall(function() box:ScrollWidgetIntoView(row, false, 0) end)
-
-    -- NOTE: do NOT add this row to the panel's OptionWidgetArray / OptionList.
-    -- The game iterates those and assumes its own managed widgets; a foreign
-    -- entry makes it dereference invalid data and crash (observed: C0000005).
-    -- Visibility is handled by placing the row at the top of the scroll box and
-    -- by tools to scroll it into view instead.
-
-    _G.LibrarianUIScale_row = row
-    _G.LibrarianUIScale_panel = panel
+    registerFocus(panel, row)
 end
 
 local function addRow()
-    injectRowInto(firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget"))
+    attachRow(firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget"))
 end
 
 --- Drive the injected row's slider programmatically (simulates the player
@@ -531,6 +538,69 @@ local function uiscaleStatus()
     log("status: panelValid=" .. tostring(isValid(panel)) .. " panelVisible=" .. pvis)
     log("  panelName=" .. pname)
     log("  rowValid=" .. tostring(isValid(row)) .. " rowVisible=" .. rvis .. " rowParent=" .. rparent)
+end
+
+--- Test the controller-focus path: ask the game to select our row.
+local function selectRow()
+    local panel = _G.LibrarianUIScale_panel
+    local row = _G.LibrarianUIScale_row
+    if not isValid(panel) or not isValid(row) then
+        log("select: no row/panel")
+        return
+    end
+    local ok, err = pcall(function() panel:ChangeSelectOption(row) end)
+    local idx = "?"
+    pcall(function() idx = tostring(panel.SelectOptionIdx) end)
+    log("select: ChangeSelectOption ok=" .. tostring(ok) .. " err=" .. tostring(err)
+        .. " SelectOptionIdx=" .. idx)
+end
+
+--- Diagnostics: dump the game's focus arrays.
+local function focusInfo()
+    local panel = _G.LibrarianUIScale_panel
+    local row = _G.LibrarianUIScale_row
+    if not isValid(panel) then
+        log("focusinfo: no panel")
+        return
+    end
+    local wa, ol = nil, nil
+    pcall(function() wa = panel.OptionWidgetArray end)
+    pcall(function() ol = panel.OptionList end)
+    local nwa, nol = -1, -1
+    if wa ~= nil then pcall(function() nwa = #wa end) end
+    if ol ~= nil then pcall(function() nol = #ol end) end
+    log("focusinfo: OptionWidgetArray=" .. nwa .. " OptionList=" .. nol)
+    for i = 1, (nwa > 0 and nwa or 0) do
+        local e = wa[i]
+        if isValid(e) then log("  WA[" .. i .. "]=" .. fullName(e)) end
+    end
+    if isValid(row) then
+        log("  ourRow inWA=" .. tostring(wa ~= nil and arrayHas(wa, row))
+            .. " inOL=" .. tostring(ol ~= nil and arrayHas(ol, row)))
+    end
+    local si, sel = "?", "?"
+    pcall(function() si = tostring(panel.SelectOptionIdx) end)
+    pcall(function() sel = tostring(panel.SelectedIdx) end)
+    log("  SelectOptionIdx=" .. si .. " SelectedIdx=" .. sel)
+end
+
+--- Diagnostics: select a game row by index in OptionWidgetArray.
+local function selectIndex(i)
+    i = tonumber(i)
+    local panel = _G.LibrarianUIScale_panel
+    local wa = nil
+    pcall(function() wa = panel.OptionWidgetArray end)
+    local e = nil
+    pcall(function() e = wa[i] end)
+    if not isValid(panel) or not i or not isValid(e) then
+        log("selectindex: invalid (" .. tostring(i) .. ")")
+        return
+    end
+    local ok, err = pcall(function() panel:ChangeSelectOption(e) end)
+    local si = "?"
+    pcall(function() si = tostring(panel.SelectOptionIdx) end)
+    log("selectindex " .. i .. " (" .. fullName(e) .. ") ok=" .. tostring(ok)
+        .. " err=" .. tostring(err) .. " SelectOptionIdx=" .. si)
 end
 
 --- Scroll the injected row into view and make the scroll bar visible.
@@ -855,6 +925,13 @@ local function runCommand(line)
         scrollToRow()
     elseif c == "uiscale_status" then
         uiscaleStatus()
+    elseif c == "uiscale_select" then
+        selectRow()
+    elseif c == "uiscale_focusinfo" then
+        focusInfo()
+    elseif c == "uiscale_selectindex" then
+        selectIndex(parts[2])
+
     elseif c == "press" then
         pressButton(parts[2])
     elseif c == "funcs" then
@@ -952,7 +1029,7 @@ safe("hook SettingWidget:RefreshSettings", function()
         function(self)
             pcall(function()
                 if isValid(self) and className(self) == "GameSettingsOptionsUMG_C" then
-                    injectRowInto(self)
+                    attachRow(self)
                 end
             end)
         end)
@@ -1026,8 +1103,7 @@ local function scheduleInject(delayMs)
     LoopAsync(delayMs or 50, function()
         local panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")
         if isValid(panel) and not rowAttachedTo(panel) then
-            _G.LibrarianUIScale_row = nil
-            injectRowInto(panel)
+            attachRow(panel)
         end
         return true
     end)
@@ -1076,8 +1152,7 @@ LoopAsync(150, function()
     pcall(function() visible = panel:IsVisible() end)
     if not visible then return false end
     if not rowAttachedTo(panel) then
-        _G.LibrarianUIScale_row = nil
-        injectRowInto(panel)
+        attachRow(panel)
     end
     return false
 end)
