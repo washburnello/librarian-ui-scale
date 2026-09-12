@@ -200,11 +200,21 @@ local function clamp(v)
 end
 
 local lastApplied = nil
+local menuOpen = false
+local MENU_SCALE_CAP = tonumber(config.menu_cap) or 1.25
 
-local function applyScale(v, persist, inline)
-    v = clamp(v)
-    currentScale = v
-    lastApplied = v
+--- Scale actually pushed to the engine. While the Settings menu is open this is
+--- capped, because a high scale makes the menu taller than the screen and its
+--- controls (including this setting) get pushed off the bottom out of reach.
+local function effectiveScale()
+    if menuOpen and currentScale > MENU_SCALE_CAP then
+        return MENU_SCALE_CAP
+    end
+    return currentScale
+end
+
+local function pushApplicationScale(inline)
+    local v = effectiveScale()
     local function set()
         local s = getUISettings()
         if not s then
@@ -212,31 +222,39 @@ local function applyScale(v, persist, inline)
             return
         end
         safe("set ApplicationScale", function() s.ApplicationScale = v end)
-        log(string.format("applyScale -> %.2f (read back %s)", v, tostring(readScale())))
+        log(string.format("ApplicationScale -> %.2f (chosen %.2f, menuOpen=%s)",
+            v, currentScale, tostring(menuOpen)))
     end
     if inline then set() else onGameThread(set) end
-    -- Keep the injected row in sync when the scale changes from elsewhere
-    -- (hotkeys / config), and refresh the on-screen indicator.
+end
+
+local function applyScale(v, persist, inline)
+    currentScale = clamp(v)
+    lastApplied = currentScale
+    pushApplicationScale(inline)
+    -- Keep the injected row in sync and refresh the indicator. It shows the
+    -- chosen value even while the menu is displayed at the capped scale.
+    local chosen = currentScale
     local row = _G.LibrarianUIScale_row
     if isValid(row) then
-        pcall(function() row.Option.OptionValue.FloatValue = v end)
-        pcall(function() row.Slider_Value:SetValue(v) end)
-        _G.LibrarianUIScale_lastSlider = v
+        pcall(function() row.Option.OptionValue.FloatValue = chosen end)
+        pcall(function() row.Slider_Value:SetValue(chosen) end)
+        _G.LibrarianUIScale_lastSlider = chosen
         pcall(function()
-            row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(v)))
+            row.Text_OptionName:SetText(makeText(UI_SCALE_NAME .. ": " .. scaleLabel(chosen)))
         end)
         pcall(function()
             if isValid(row.Text_OptionValue) then
-                row.Text_OptionValue:SetText(makeText(scaleLabel(v)))
+                row.Text_OptionValue:SetText(makeText(scaleLabel(chosen)))
             end
         end)
         pcall(function()
             if isValid(row.EditableText_Value) then
-                row.EditableText_Value:SetText(makeText(string.format("%.2f", v)))
+                row.EditableText_Value:SetText(makeText(string.format("%.2f", chosen)))
             end
         end)
     end
-    if persist ~= false then persistScale(v) end
+    if persist ~= false then persistScale(chosen) end
 end
 
 -- ---------------------------------------------------------------------------
@@ -1215,8 +1233,26 @@ end
 -- method calls per tick; a full object scan happens only if the cached panel
 -- goes away (e.g. a new game session).
 local cachedPanel = nil
+local cachedMenu = nil
 local openHooksTried = false
 LoopAsync(150, function()
+    -- Track the whole Settings menu so we can cap the scale while it is open.
+    local menu = cachedMenu
+    if not isValid(menu) then
+        menu = firstLiveObject("SettingsMenuBP", nil)
+        cachedMenu = menu
+    end
+    local menuVisible = false
+    if isValid(menu) then
+        pcall(function() menuVisible = menu:IsVisible() end)
+    end
+    if menuVisible ~= menuOpen then
+        menuOpen = menuVisible
+        pushApplicationScale(false)
+        log("settings menu " .. (menuOpen and "opened" or "closed")
+            .. " -> ApplicationScale " .. string.format("%.2f", effectiveScale()))
+    end
+
     local panel = cachedPanel
     if not isValid(panel) then
         panel = firstLiveObject("GameSettingsOptionsUMG", "/Script/Librarian.SettingWidget")

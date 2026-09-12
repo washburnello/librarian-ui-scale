@@ -18,6 +18,9 @@ modified; the mod is a Lua script that runs at runtime.
 - ✅ The row is registered in the game's controller-focus list so a gamepad can
   reach it (implemented and verified via the game's own navigation events, but
   not yet tried on a physical controller).
+- ✅ While the **Settings menu is open the scale is capped** (default `1.25x`) so
+  the menu always fits on screen and this setting stays reachable. Your chosen
+  scale applies everywhere else. Change the cap with `menu_cap` in `config.lua`.
 
 See [`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md) for how it
 works.

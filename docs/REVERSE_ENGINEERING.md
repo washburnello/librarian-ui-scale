@@ -183,6 +183,20 @@ Two more runtime quirks discovered while fixing the reopen bug:
   none) while `IsValid(row)` stays true. Re-injection is therefore gated on
   `row:GetParent()` matching the panel's `OptionsBox`, not on `IsValid` alone.
 
+## Settings-menu scale cap
+
+`ApplicationScale` scales the *entire* Slate UI, including the Settings menu
+itself. At high values the menu becomes taller than the screen, pushing its
+controls (and the UI Scale row) off the bottom, so the player cannot undo it —
+a hard lock. Both `GameSettingsOptionsUMG` and `GraphicsOptionsUMG` use the same
+`UScrollBox` (`OptionsBox`, `ScrollBarVisibility=Visible`) but this does not help
+because the scroll viewport is also scaled off-screen.
+
+The mod therefore watches `SettingsMenuBP_C:IsVisible()` and, while the menu is
+open, clamps the applied scale to `config.menu_cap` (default `1.25`). The user's
+chosen value is kept and restored the moment the menu closes. Detection uses
+`IsVisible()` (reliable) rather than `IsInViewport()` (always false here).
+
 ## Known limitations / next work
 
 - The injected row is added at the end of the scroll box and is not yet part
